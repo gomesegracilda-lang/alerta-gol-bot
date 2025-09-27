@@ -1,20 +1,19 @@
-# main.py — Bot de alertas de gol (janela configurável, padrão 3min)
+# main.py — Bot de alertas de gol (janela 3min)
 import os, asyncio, math, random
 from datetime import datetime, timedelta
+from telegram.ext import ApplicationBuilder, CommandHandler
 
 WINDOW_MINUTES = int(os.getenv("WINDOW_MINUTES", "3"))
 ALERT_THRESHOLD = float(os.getenv("ALERT_THRESHOLD", "0.6"))
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
-# ---------- Probabilidade ----------
 def prob_goal_next_window(xg_recent: float, shots_on_target: int,
                           red_advantage: bool, fav_ld_after60: bool) -> float:
     lam = max(0.0, xg_recent)
     if red_advantage: lam *= 1.30
     if fav_ld_after60: lam *= 1.15
     if shots_on_target >= 2: lam *= 1.10
-    p = 1 - math.exp(-lam)
-    return max(0.0, min(1.0, p))
+    return max(0.0, min(1.0, 1 - math.exp(-lam)))
 
 def reasons(xg, sot, red, fav):
     r = [f"xG{WINDOW_MINUTES}={xg:.2f}"]
@@ -23,7 +22,6 @@ def reasons(xg, sot, red, fav):
     if fav: r.append("favorito perdendo/empatando")
     return ", ".join(r)
 
-# ---------- Mock provider (para testar) ----------
 class MockMatch:
     def __init__(self, mid, league, home, away):
         self.id = mid; self.league = league; self.home = home; self.away = away
@@ -40,12 +38,9 @@ def get_mock_matches():
     if not hasattr(get_mock_matches, "games"):
         get_mock_matches.games = [MockMatch("M1", "Liga Demo", "Time A", "Time B"),
                                   MockMatch("M2", "Copa Teste", "Time C", "Time D")]
-    for g in get_mock_matches.games:
-        g.tick()
+    for g in get_mock_matches.games: g.tick()
     return get_mock_matches.games
 
-# ---------- Telegram ----------
-from telegram.ext import ApplicationBuilder, CommandHandler
 USERS = {}
 
 async def cmd_start(update, ctx):
@@ -59,7 +54,7 @@ async def cmd_threshold(update, ctx):
     cid = update.effective_chat.id
     if not ctx.args: return await ctx.bot.send_message(cid, "Ex.: /threshold 0.6")
     try:
-        v = float(ctx.args[0]); v = max(0.1, min(0.95, v))
+        v = max(0.1, min(0.95, float(ctx.args[0])))
         USERS.setdefault(cid, {"threshold": ALERT_THRESHOLD, "last_alert": {}})
         USERS[cid]["threshold"] = v
         await ctx.bot.send_message(cid, f"Threshold atualizado para {v:.2f}")
@@ -68,12 +63,8 @@ async def cmd_threshold(update, ctx):
 
 async def cmd_test(update, ctx):
     cid = update.effective_chat.id
-    p = 0.72
-    await ctx.bot.send_message(cid,
-        f"⚽ Prob. alta de gol — Jogo de teste\nP≈{p*100:.0f}% • "
-        f"{reasons(0.55, 3, True, True)}")
+    await ctx.bot.send_message(cid, f"⚽ Prob. alta de gol — Jogo de teste\nP≈72% • {reasons(0.55, 3, True, True)}")
 
-# ---------- Loop ----------
 async def loop_processor(app):
     while True:
         now = datetime.utcnow()
@@ -91,7 +82,6 @@ async def loop_processor(app):
                         prefs["last_alert"][(m.id, bucket)] = now
         await asyncio.sleep(5)
 
-# ---------- Healthcheck ----------
 async def start_health():
     from aiohttp import web
     async def ok(_): return web.json_response({"ok": True, "window": WINDOW_MINUTES})
